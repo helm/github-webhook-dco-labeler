@@ -8,6 +8,11 @@ This was written for the helm charts repository.
 This repository includes a Dockerfile and a Helm chart to install the application
 within a Kubernetes cluster.
 
+## Note On Helm Charts
+
+This repository is meant to be under that helm org but is here as a temporary
+dev location during a point in governance transition.
+
 ## TODO:
 
 - [x] Write app
