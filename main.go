@@ -53,7 +53,14 @@ func main() {
 	// Disable color in output
 	gin.DisableConsoleColor()
 
-	router := gin.Default()
+	router := gin.New()
+
+	// Recovery enables Gin to handle panics and provides a 500 error
+	router.Use(gin.Recovery())
+
+	// gin.Default() setups up recovery and logging on all paths. In this case
+	// we want to skip /healthz checks so as not to clutter up the logs.
+	router.Use(gin.LoggerWithWriter(gin.DefaultWriter, "/healthz"))
 
 	// We can use this to check the health or and make sure the app is online
 	router.GET("/healthz", healthz)
