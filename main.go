@@ -33,6 +33,8 @@ var (
 	ghToken string
 
 	testRe = regexp.MustCompile(`(?mi)^Signed-off-by: (.*) <(.*)>$`)
+
+	retestRe = regexp.MustCompile(`(?m)^/check-dco\s*$`)
 )
 
 const (
@@ -100,7 +102,11 @@ func processHook(c *gin.Context) {
 	// We need to get the event from the Request object as Gin in the middle
 	// does some normalization that breaks this particular header name.
 	event := c.Request.Header.Get("X-GitHub-Event")
-	if event != "pull_request" {
+
+	// When pull requests and comments come in we check them. Pull requests tell
+	// us when code has changed to check. Comments allow us to re-trigger a check
+	// for situations when the bot goes offline or some other problem occurs.
+	if event != "pull_request" && event != "issue_comment" {
 		c.JSON(http.StatusOK, gin.H{"message": "Skipping event type"})
 		return
 	}
@@ -112,90 +118,12 @@ func processHook(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"message": "Malformed body"})
 		return
 	}
-	payload := e.(*github.PullRequestEvent)
 
-	// Check this is a repo we operate on
-	if *payload.Repo.FullName != repoFullName {
-		c.JSON(http.StatusForbidden, gin.H{"message": "Not configured for this repository"})
-		return
+	if event == "pull_request" {
+		handlePR(c, e)
+	} else if event == "issue_comment" {
+		handleComment(c, e)
 	}
-
-	// Filter pull request actions we aren't intersted in like labels being added/removed
-	if *payload.Action != "opened" && *payload.Action != "synchronize" && *payload.Action != "reopened" {
-		c.JSON(http.StatusOK, gin.H{"message": "Skipping action"})
-		return
-	}
-
-	// Send initial notification
-	err = sendNotification(payload.PullRequest.Head.GetSHA(), statePending, "Checking for DCO")
-	if err != nil {
-
-		// Not exiting on this error because technically we can continue but we
-		// are likely to run into future problems.
-		logit("ERROR: Unable to sending checking notification for PR %s: %s", *payload.Number, err)
-	}
-
-	// Get commits
-	commits, err := getCommits(*payload.Number)
-	if err != nil {
-		logit("ERROR: Unable to get PR commits for PR %s: %s", *payload.Number, err)
-		c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (1)"})
-		return
-	}
-
-	// Check commits for DCO
-	count := 0
-	missed := 0
-	for _, commit := range commits {
-		count++
-		message := commit.GetCommit().GetMessage()
-		if !testRe.MatchString(message) {
-			missed++
-		}
-	}
-
-	// If they have DCO 1. add label and 2. send notification
-	if missed == 0 {
-
-		// Add label
-		labels := []string{"Contribution Allowed"}
-		err = addLabel(*payload.Number, labels)
-		if err != nil {
-			logit("ERROR: Unable to add label to PR %s: %s", *payload.Number, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (2)"})
-			return
-		}
-
-		// Send Notification
-		err = sendNotification(payload.PullRequest.Head.GetSHA(), stateSuccess, "All commits have signoff")
-		if err != nil {
-
-			logit("ERROR: Unable to sending success notification for PR %s: %s", *payload.Number, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (3)"})
-			return
-		}
-	} else {
-		// If no DCO 1. Remove label and 2. send notification
-		err = removeLabel(*payload.Number, "Contribution Allowed")
-		if err != nil {
-
-			logit("ERROR: Unable to remove label from PR %s: %s", *payload.Number, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (4)"})
-			return
-		}
-
-		// Send Notification
-		msg := fmt.Sprintf("%d out of %d commits are missing signoff", missed, count)
-		err = sendNotification(payload.PullRequest.Head.GetSHA(), stateFailure, msg)
-		if err != nil {
-
-			logit("ERROR: Unable to sending failure notification for PR %s: %s", *payload.Number, err)
-			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (5)"})
-			return
-		}
-	}
-
-	c.JSON(http.StatusOK, gin.H{"message": "Success"})
 }
 
 func validateSig(sig string, body []byte) error {
@@ -299,4 +227,148 @@ func ghClient() (context.Context, *github.Client) {
 	c := context.Background()
 	tc := oauth2.NewClient(c, t)
 	return c, github.NewClient(tc)
+}
+
+func handlePR(c *gin.Context, e interface{}) {
+	payload := e.(*github.PullRequestEvent)
+
+	// Check this is a repo we operate on
+	if *payload.Repo.FullName != repoFullName {
+		c.JSON(http.StatusForbidden, gin.H{"message": "Not configured for this repository"})
+		return
+	}
+
+	// Filter pull request actions we aren't intersted in like labels being added/removed
+	if *payload.Action != "opened" && *payload.Action != "synchronize" && *payload.Action != "reopened" {
+		c.JSON(http.StatusOK, gin.H{"message": "Skipping action"})
+		return
+	}
+
+	doCheck(c, *payload.Number, payload.PullRequest.Head.GetSHA())
+}
+
+func handleComment(c *gin.Context, e interface{}) {
+
+	payload := e.(*github.IssueCommentEvent)
+
+	// This is handled without making an API call. Happens from content of issue event
+	if !payload.Issue.IsPullRequest() {
+		c.JSON(http.StatusOK, gin.H{"message": "Skipping issue"})
+		return
+	}
+	if *payload.Issue.State != "open" {
+		c.JSON(http.StatusOK, gin.H{"message": "Skipping closed pull request"})
+		return
+	}
+
+	// Check repo name
+	if *payload.Repo.FullName != repoFullName {
+		c.JSON(http.StatusForbidden, gin.H{"message": "Not configured for this repository"})
+		return
+	}
+
+	// Check action
+	if *payload.Action == "deleted" {
+		c.JSON(http.StatusOK, gin.H{"message": "Skipping deleted action"})
+		return
+	}
+
+	// Check if action in comment body
+	shouldRerun := retestRe.MatchString(*payload.Comment.Body)
+	if shouldRerun {
+		// Get SHA
+		parts := strings.Split(repoFullName, "/")
+		if len(parts) != 2 {
+			logit("ERROR: Unable to parse repo name")
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request"})
+			return
+		}
+
+		ct, client := ghClient()
+		pr, _, err := client.PullRequests.Get(ct, parts[0], parts[1], *payload.Issue.Number)
+		if err != nil {
+			logit("ERROR: Unable to get PR object for PR Number %s: %s", *payload.Issue.Number, err)
+			c.JSON(http.StatusBadRequest, gin.H{"message": "Malformed request payload"})
+			return
+		}
+
+		// Run check
+		doCheck(c, *payload.Issue.Number, pr.Head.GetSHA())
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Skipping because action not found"})
+}
+
+func doCheck(c *gin.Context, num int, sha string) {
+	// Send initial notification
+	err := sendNotification(sha, statePending, "Checking for DCO")
+	if err != nil {
+
+		// Not exiting on this error because technically we can continue but we
+		// are likely to run into future problems.
+		logit("ERROR: Unable to sending checking notification for PR %s: %s", num, err)
+	}
+
+	// Get commits
+	commits, err := getCommits(num)
+	if err != nil {
+		logit("ERROR: Unable to get PR commits for PR %s: %s", num, err)
+		c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (1)"})
+		return
+	}
+
+	// Check commits for DCO
+	count := 0
+	missed := 0
+	for _, commit := range commits {
+		count++
+		message := commit.GetCommit().GetMessage()
+		if !testRe.MatchString(message) {
+			missed++
+		}
+	}
+
+	// If they have DCO 1. add label and 2. send notification
+	if missed == 0 {
+
+		// Add label
+		labels := []string{"Contribution Allowed"}
+		err = addLabel(num, labels)
+		if err != nil {
+			logit("ERROR: Unable to add label to PR %s: %s", num, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (2)"})
+			return
+		}
+
+		// Send Notification
+		err = sendNotification(sha, stateSuccess, "All commits have signoff")
+		if err != nil {
+
+			logit("ERROR: Unable to sending success notification for PR %s: %s", num, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (3)"})
+			return
+		}
+	} else {
+		// If no DCO 1. Remove label and 2. send notification
+		err = removeLabel(num, "Contribution Allowed")
+		if err != nil {
+
+			logit("ERROR: Unable to remove label from PR %s: %s", num, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (4)"})
+			return
+		}
+
+		// Send Notification
+		msg := fmt.Sprintf("%d out of %d commits are missing signoff", missed, count)
+		err = sendNotification(sha, stateFailure, msg)
+		if err != nil {
+
+			logit("ERROR: Unable to sending failure notification for PR %s: %s", num, err)
+			c.JSON(http.StatusInternalServerError, gin.H{"message": "Error processing request (5)"})
+			return
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{"message": "Success"})
 }
