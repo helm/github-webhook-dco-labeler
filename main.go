@@ -322,6 +322,11 @@ func doCheck(c *gin.Context, num int, sha string) {
 	count := 0
 	missed := 0
 	for _, commit := range commits {
+
+		// Multiple parents happen on merge commits and we want to skip those.
+		if len(commit.Parents) > 1 {
+			continue
+		}
 		count++
 		message := commit.GetCommit().GetMessage()
 		if !testRe.MatchString(message) {

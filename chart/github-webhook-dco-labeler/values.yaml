@@ -2,7 +2,7 @@ replicaCount: 1
 
 image:
   repository: mattfarina/github-webhook-dco-labeler
-  tag: 0.0.3
+  tag: 0.0.4
   pullPolicy: IfNotPresent
 
 secrets:
