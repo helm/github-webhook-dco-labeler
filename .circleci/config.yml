@@ -26,7 +26,10 @@ jobs:
       
 workflows:
   version: 2
-  lint:
+  build:
     jobs:
-      - build
+      - build:
+          filters:
+              tags:
+                only: /.*/
       - lint-charts
