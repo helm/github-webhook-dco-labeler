@@ -31,17 +31,17 @@ spec:
             - name: GITHUB_SHARED_SECRET
               valueFrom:
                 secretKeyRef:
-                  name: {{ template "github-webhook-dco-labeler.fullname" . }}
+                  name: {{ template "github-webhook-dco-labeler.secretname" . }}
                   key: shared-secret
             - name: GITHUB_REPO_NAME
               valueFrom:
                 secretKeyRef:
-                  name: {{ template "github-webhook-dco-labeler.fullname" . }}
+                  name: {{ template "github-webhook-dco-labeler.secretname" . }}
                   key: github-repo-name
             - name: GITHUB_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: {{ template "github-webhook-dco-labeler.fullname" . }}
+                  name: {{ template "github-webhook-dco-labeler.secretname" . }}
                   key: github-token
           livenessProbe:
             httpGet:

@@ -30,3 +30,10 @@ Create chart name and version as used by the chart label.
 {{- define "github-webhook-dco-labeler.chart" -}}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
+
+{{/*
+The name of the secret to use
+*/}}
+{{- define "github-webhook-dco-labeler.secretname" -}}
+{{- default (include "github-webhook-dco-labeler.fullname" .) .Values.secrets.existingSecret -}}
+{{- end -}}
