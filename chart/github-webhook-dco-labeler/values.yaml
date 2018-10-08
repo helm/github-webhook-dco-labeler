@@ -7,6 +7,13 @@ image:
 
 secrets:
 
+  # The name of an existing secret to use instead of creating one. It must
+  # conform to the structure of the included secret. The advantage is that this
+  # secret can be managed out of band and without any values ended up in a
+  # configMap used by Tiller. If this value is set to a non-empty value the
+  # other elements on secret are ignored.
+  # existingSecret:
+
   # The shared secret is the secret for the webhook in GitHub
   # that the reciever needs to know as well
   sharedSecret:
