@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: mattfarina/github-webhook-dco-labeler
-  tag: 0.0.4
+  repository: quay.io/helmpack/github-webhook-dco-labeler
+  tag: 0.1.0
   pullPolicy: IfNotPresent
 
 secrets:
