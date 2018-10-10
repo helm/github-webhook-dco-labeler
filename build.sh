@@ -26,7 +26,7 @@ else
 fi
 
 echo "Building binary"
-GOOS=linux GOARCH=amd64 go build -o build/github-webhook-dco-labeler *.go
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o build/github-webhook-dco-labeler *.go
 
 echo "Building docker image"
 docker build -t quay.io/helmpack/github-webhook-dco-labeler:$VERSION .
