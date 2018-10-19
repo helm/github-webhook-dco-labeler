@@ -36,3 +36,5 @@ docker login -u $DOCKER_USER -p $DOCKER_PASS quay.io
 
 echo "Pushing image"
 docker push quay.io/helmpack/github-webhook-dco-labeler:$VERSION
+
+echo "foo"
